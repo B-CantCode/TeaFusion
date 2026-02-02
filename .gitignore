@@ -1,0 +1,45 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Streamlit cache
+.streamlit/
+
+# Logs
+*.log
+
+# Model binaries (ignore by default; remove this if you want to commit '.tflite')
+# If you need the model in repo, consider Git LFS instead of checking in binaries.
+*.tflite
+*.h5
+
+# Other large or generated files
+*.ckpt
+
+# Ignore secrets and env files
+.env
+*.pem
+
+# Keep run scripts and docs
+# (run.bat, README.md, SETUP.md, etc.)
