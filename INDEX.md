@@ -3,15 +3,16 @@
 ##  Start Here
 
 **Easiest Way (Windows):**
-1. Double-click \un.bat\
+1. Double-click \
+un.bat\
 2. Wait ~15-30 seconds
 3. App opens at http://localhost:8501
 
 **Command Line (All Platforms):**
-\\\ash
+
 pip install -r requirements.txt
 streamlit run tea_doctor_TFLITE_fixed.py
-\\\
+
 
 ---
 
@@ -40,7 +41,6 @@ streamlit run tea_doctor_TFLITE_fixed.py
 ##  Quick Commands
 
 ### Windows PowerShell
-\\\powershell
 # Create virtual environment
 python -m venv .venv
 
@@ -58,10 +58,9 @@ Ctrl+C
 
 # Deactivate environment
 deactivate
-\\\
+
 
 ### macOS/Linux Terminal
-\\\ash
 # Create virtual environment
 python3 -m venv .venv
 
@@ -79,7 +78,7 @@ Ctrl+C
 
 # Deactivate environment
 deactivate
-\\\
+
 
 ---
 
@@ -102,31 +101,31 @@ deactivate
 ##  Common Issues & Fixes
 
 ### Issue: "Python not found"
-\\\powershell
+
 # Download Python from https://www.python.org/downloads/
 # Make sure to check "Add Python to PATH" during installation
-\\\
+
 
 ### Issue: "No module named 'streamlit'"
-\\\powershell
+
 # Make sure virtual environment is activated (check for (.venv) in prompt)
 .\.venv\Scripts\Activate
 pip install -r requirements.txt
-\\\
+
 
 ### Issue: "Model file not found"
 - App will run in DEMO mode with simulated predictions
 - Place \	ea_doctor_v7_final.tflite\ in same folder for real predictions
 
 ### Issue: App starts but shows 'connection refused'
-\\\powershell
+
 # Streamlit already running on same port?
 # Kill existing process:
 Get-Process streamlit -ErrorAction SilentlyContinue | Stop-Process -Force
 
 # Try a different port:
 streamlit run tea_doctor_TFLITE_fixed.py --server.port=8502
-\\\
+
 
 ### Issue: "Out of memory" error
 - Close other applications
@@ -202,12 +201,12 @@ Access in: About section  Emergency Helplines
 
 ##  Supported Languages
 
-| Language | Code | UI | Disease Info | Full Support |
-|----------|------|----|----|---|
-| English | en |  |  |  |
-| हद | hi |  |  |  |
-| অসময | as |  |  |  |
-| सदर | sa |  |  |  |
+| Language | Code |
+|----------|------|
+| English | en |  
+| हद | hi |  
+| অসময | as |  
+| सदर | sa |  
 
 ---
 
@@ -257,28 +256,7 @@ Total Disk Space:     ~500 MB needed
 
 ---
 
-##  Verification Checklist
 
-Before running, verify:
-- [ ] Python 3.8+ installed (\python --version\)
-- [ ] requirements.txt exists
-- [ ] tea_doctor_TFLITE_fixed.py exists
-- [ ] 500 MB free disk space
-- [ ] 2 GB RAM available
-- [ ] Admin/user rights to create \.venv\ folder
-- [ ] Internet connection (first setup only)
-
----
-
-##  Next Steps After Setup
-
-1.  Run app successfully
-2.  Change language to your preference
-3.  Upload a tea leaf image
-4.  View the prediction
-5.  Read treatment information
-6.  Try different images
-7.  Enable Kill Switch to test
 
 ---
 
@@ -296,14 +274,6 @@ Before running, verify:
 
 ---
 
-##  Getting Help
-
-1. **Read**: SETUP.md (installation issues)
-2. **Check**: Terminal output (error messages)
-3. **Verify**: All files present
-4. **Reset**: Remove \.venv\ folder, reinstall
-5. **Demo**: Enable demo mode to test app without model
-
 ---
 
 ##  You're Ready!
@@ -311,7 +281,8 @@ Before running, verify:
 Everything is set up and documented. Choose your startup method:
 
 **Windows Users:**
- Double-click \un.bat\
+ Double-click \
+un.bat\
 
 **Mac/Linux Users:**
  Run: \streamlit run tea_doctor_TFLITE_fixed.py\
@@ -326,3 +297,4 @@ Everything is set up and documented. Choose your startup method:
 
 **Last Updated**: February 1, 2026
 **Project Status**:  COMPLETE & READY TO DEPLOY
+
