@@ -2,12 +2,6 @@
     TEA DOCTOR - PROJECT COMPLETE 
 ========================================
 
-PROJECT SUMMARY
-===============
-
-Your Tea Doctor AI disease detection app is now 
-FULLY DOCUMENTED and READY TO RUN!
-
 WHAT YOU GET
 ============
 
@@ -117,21 +111,7 @@ SUPPORTED DISEASES
 6. Red Spider Mite    (Pest)
 7. Sunlight Scorch    (Non-disease)
 
-FILE LOCATIONS
-==============
 
-Your project folder contains:
-
- c:\Users\Admin\Downloads\
-    tea_doctor_TFLITE_fixed.py    (Main app)
-    requirements.txt               (Dependencies)
-    run.bat                        (Windows launcher)
-    SETUP.md                       (Installation guide)
-    README.md                      (Features overview)
-    requirements.md                (Tech specs)
-    INDEX.md                       (Quick reference)
-    PROJECT_COMPLETE.md            (Summary)
-    tea_doctor_v7_final.tflite    (Model - optional)
 
 QUICK COMMANDS
 ==============
@@ -230,3 +210,4 @@ set up and ready to use!
 Last Updated: February 1, 2026
 
 ========================================
+
