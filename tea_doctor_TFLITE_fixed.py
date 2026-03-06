@@ -1,17 +1,58 @@
 """
-Tea Leaf Disease Detector - Streamlit app (TFLite)
+Tea Leaf Disease Detector - Streamlit App (TFLite v3.6)
 
-Lightweight, offline-capable UI for running a TFLite model to
-predict tea leaf diseases. This file has been adjusted for a
-more professional UI and requires a valid TFLite model to run predictions.
+ECA Tri-Branch Fusion CNN for Real-Time Tea Disease Detection.
+Uses the v3.6 TFLite model with 8-channel colour + 11-channel texture
+feature extraction and optional post-hoc refinement (temperature scaling
++ per-class thresholds).
+
+Model : EfficientNetV2-B0 + 2x MobileNetV2 alpha=0.35 + ECA(k=5)
+Params: 8.1 M total, 3.3 M trainable
+TFLite: 9.05 MB - 27 ms - 37.6 FPS
 """
 
 import streamlit as st
 import cv2
 import numpy as np
+import json
 from PIL import Image
 from pathlib import Path
 import matplotlib.pyplot as plt
+
+# Optional: LBP from scikit-image (graceful fallback if missing)
+try:
+    from skimage.feature import local_binary_pattern
+    HAS_LBP = True
+except ImportError:
+    HAS_LBP = False
+
+# ============================================================================
+# PATHS  -  point at the real v3.6 artefacts
+# ============================================================================
+
+MODEL_DIR = Path(r"C:\Users\Admin\Downloads\New tea")
+TFLITE_PATH = MODEL_DIR / "fusion_model_baseline.tflite"
+REFINE_CFG_PATH = MODEL_DIR / "refined_tflite_config.json"
+RESULTS_PATH = MODEL_DIR / "results_final (1).json"
+
+# Fallback: look for model in the same directory as this script
+SCRIPT_DIR = Path(__file__).resolve().parent
+TFLITE_PATH_LOCAL = SCRIPT_DIR / "fusion_model_baseline.tflite"
+REFINE_CFG_LOCAL = SCRIPT_DIR / "refined_tflite_config.json"
+
+# ============================================================================
+# CONSTANTS
+# ============================================================================
+
+CLASS_NAMES = [
+    "Brown_Blight", "Gray_Blight", "Healthy_leaf",
+    "Helopeltis", "Red_Rust", "Red_spider", "Sunlight_Scorching",
+]
+IMG_SIZE = 224
+COLOR_CHANNELS = 8
+TEXTURE_CHANNELS = 11
+LBP_RADIUS = 1
+LBP_POINTS = 8
 
 # ============================================================================
 # TRANSLATIONS DICTIONARY
@@ -183,7 +224,7 @@ TRANSLATIONS = {
     "emergency_helplines": {
         "en": "Emergency Helplines",
         "hi": "आपातकालीन हेल्पलाइन",
-        "as": "জরুरি সহায়তা লাইন",
+        "as": "জরুরি সহায়তা লাইন",
         "sa": "आपातकालीन हेल्पलाइन",
     },
     "banking_support": {
@@ -228,6 +269,12 @@ TRANSLATIONS = {
         "as": "স্থানীয় সহায়তা",
         "sa": "स्थानीय सहायता",
     },
+    "model_information": {
+        "en": "Model Information",
+        "hi": "मॉडल जानकारी",
+        "as": "মডেল তথ্য",
+        "sa": "मॉडल जानकारी",
+    },
     "input_tensors": {
         "en": "Input tensors",
         "hi": "इनपुट टेंसर्स",
@@ -240,50 +287,42 @@ TRANSLATIONS = {
         "as": "আউটপুট টেনসর",
         "sa": "आउटपुट टेंसर्स",
     },
+    "refined_prediction": {
+        "en": "Refined prediction (post-hoc calibration applied)",
+        "hi": "परिष्कृत भविष्यवाणी (पोस्ट-हॉक कैलिब्रेशन लागू)",
+        "as": "পৰিশোধিত পূৰ্বানুমান (পোষ্ট-হক কেলিব্রেশন প্ৰয়োগ)",
+        "sa": "परिष्कृत भविष्यवाणी (पोस्ट-हॉक कैलिब्रेशन लागू)",
+    },
 }
 
 DISEASE_NAMES = {
     "Brown_Blight": {
-        "en": "Brown Blight",
-        "hi": "भूरी झुलसा",
-        "as": "ব্রাউন ব্লাইট",
-        "sa": "भूरी झुलसा",
+        "en": "Brown Blight", "hi": "भूरी झुलसा",
+        "as": "ব্রাউন ব্লাইট", "sa": "भूरी झुलसा",
     },
     "Gray_Blight": {
-        "en": "Gray Blight",
-        "hi": "ग्रे झुलसा",
-        "as": "গ্রে ব্লাইট",
-        "sa": "ग्रे झुलसा",
+        "en": "Gray Blight", "hi": "ग्रे झुलसा",
+        "as": "গ্রে ব্লাইট", "sa": "ग्रे झुलसा",
     },
     "Healthy_leaf": {
-        "en": "Healthy Leaf",
-        "hi": "स्वस्थ पत्ती",
-        "as": "সুস্থ পাত",
-        "sa": "स्वस्थ पत्ती",
+        "en": "Healthy Leaf", "hi": "स्वस्थ पत्ती",
+        "as": "সুস্থ পাত", "sa": "स्वस्थ पत्ती",
     },
     "Helopeltis": {
-        "en": "Helopeltis (Mosquito Bug)",
-        "hi": "हेलोपेल्टिस (मच्छर कीट)",
-        "as": "হেলোপেল্টিস (মছুনি পোক)",
-        "sa": "हेलोपेल्टिस (मच्छर कीट)",
+        "en": "Helopeltis (Mosquito Bug)", "hi": "हेलोपेल्टिस (मच्छर कीट)",
+        "as": "হেলোপেল্টিস (মছুনি পোক)", "sa": "हेलोपेल्टिस (मच्छर कीट)",
     },
     "Red_Rust": {
-        "en": "Red Rust",
-        "hi": "लाल जंग",
-        "as": "ৰঙা ৰং",
-        "sa": "लाल जंग",
+        "en": "Red Rust", "hi": "लाल जंग",
+        "as": "ৰঙা ৰং", "sa": "लाल जंग",
     },
     "Red_spider": {
-        "en": "Red Spider Mite",
-        "hi": "लाल मकड़ी का कण",
-        "as": "ৰঙা মকৰা কণ",
-        "sa": "लाल मकड़ी का कण",
+        "en": "Red Spider Mite", "hi": "लाल मकड़ी का कण",
+        "as": "ৰঙা মকৰা কণ", "sa": "लाल मकड़ी का कण",
     },
     "Sunlight_Scorching": {
-        "en": "Sunlight Scorching",
-        "hi": "धूप से झुलसा",
-        "as": "ৰ'দত পোৰা",
-        "sa": "धूप से झुलसा",
+        "en": "Sunlight Scorching", "hi": "धूप से झुलसा",
+        "as": "ৰ'দত পোৰা", "sa": "धूप से झुलसा",
     },
 }
 
@@ -293,7 +332,7 @@ DISEASE_INFO = {
         "what_is": {
             "en": "Brown blight is a fungal disease that causes brown circular lesions on leaves, often after physical damage or wet conditions.",
             "hi": "भूरी झुलसा एक कवक रोग है जो भौतिक क्षति या गीली स्थितियों के बाद पत्तियों पर भूरे गोलाकार घाव का कारण बनता है।",
-            "as": "ব্রাউন ব্লাইট এক ভেঁকুৰ ৰোগ যি ভৌতিক ক্ষতি বা আর্দ্র অৱস্থাৰ পিছত পাতত ভূরे বৃত্তাকাৰ ক্ষত সৃষ্টি কৰে।",
+            "as": "ব্রাউন ব্লাইট এক ভেঁকুৰ ৰোগ যি ভৌতিক ক্ষতি বা আর্দ্র অৱস্থাৰ পিছত পাতত ভূরে বৃত্তাকাৰ ক্ষত সৃষ্টি কৰে।",
             "sa": "भूरी झुलसा एक कवक रोग है जो भौतिक क्षति या गीली स्थितियों के बाद पत्तियों पर भूरे गोलाकार घाव का कारण बनता है।",
         },
         "spread": {
@@ -305,26 +344,26 @@ DISEASE_INFO = {
         "causes": {
             "en": "Rough plucking, hail or physical damage, prolonged leaf wetness, and poor drainage.",
             "hi": "कठोर तोड़ना, ओले या भौतिक क्षति, लंबे समय तक पत्ती की नमी, और खराब जल निकासी।",
-            "as": "কঠোৰ তোড়া, শিলা বা ভৌতिক ক্षতি, দীর্ঘস্থায়ী পাত সেতুপন, আৰু বেয়া জল निকासी।",
+            "as": "কঠোৰ তোড়া, শিলা বা ভৌতিক ক্ষতি, দীর্ঘস্থায়ী পাত সেতুপন, আৰু বেয়া জল निকাশী।",
             "sa": "कठोर तोड़ना, ओले या भौतिक क्षति, लंबे समय तक पत्ती की नमी, और खराब जल निकासी।",
         },
         "cure": {
             "en": "Apply Copper Oxychloride fungicide per label. Remove and destroy infected leaves. Improve drainage.",
             "hi": "निर्देशानुसार कॉपर ऑक्सीक्लोराइड कवकनाशी लागू करें। संक्रमित पत्तियों को हटाएं और नष्ट करें। जल निकासी में सुधार करें।",
-            "as": "নির্দেশ অনুসাৰে কপাৰ অক্সিক্লোৰাইড কৰ্কটনাশী প্ৰয়োগ কৰক। সংক্রমিত পাত আঁতৰাওক আৰু ধ্বংস কৰক। জল নির्কাशনে উন্নति কৰক।",
+            "as": "নির্দেশ অনুসাৰে কপাৰ অক্সিক্লোৰাইড কৰ্কটনাশী প্ৰয়োগ কৰক। সংক্রমিত পাত আঁতৰাওক আৰু ধ্বংস কৰক। জল নিৰ্কাশনে উন্নতি কৰক।",
             "sa": "निर्देशानुसार कॉपर ऑक्सीक्लोराइड कवकनाशी लागू करें। संक्रमित पत्तियों को हटाएं और नष्ट करें। जल निकासी में सुधार करें।",
         },
         "prevention": {
             "en": "Avoid wounds during plucking, improve field drainage, follow preventive spray schedules.",
             "hi": "तोड़ते समय घाव से बचें, खेत की जल निकासी में सुधार करें, रोकथाम स्प्रे कार्यक्रम का पालन करें।",
-            "as": "তোড়াৰ সময় ক্ষত এড়াওক, খেতৰ জল निकास উন্নত কৰক, প্রতিরোধমূলক স্প्রে সময়সূচী অনুসরণ কৰক।",
+            "as": "তোড়াৰ সময় ক্ষত এড়াওক, খেতৰ জল নিকাশ উন্নত কৰক, প্রতিরোধমূলক স্প্রে সময়সূচী অনুসরণ কৰক।",
             "sa": "तोड़ते समय घाव से बचें, खेत की जल निकासी में सुधार करें, रोकथाम स्प्रे कार्यक्रम का पालन करें।",
         },
     },
     "Gray_Blight": {
         "severity": "high",
         "what_is": {
-            "en": "Gray blight produces greyish lesions with dark centers that coalesce into larger patches.",
+            "en": "Gray blight produces greyish lesions with dark centres that coalesce into larger patches.",
             "hi": "ग्रे झुलसा भूरे रंग के घाव पैदा करता है जिनके गहरे केंद्र हैं जो बड़े पैच में मिल जाते हैं।",
             "as": "গ্রে ব্লাইট ধূসর বর্ণের ক্ষত উৎপন্ন কৰে যাৰ অন্ধকাৰ কেন্দ্র আছে যি বৃহত্তর প্যাচত মিলিত হয়।",
             "sa": "ग्रे झुलसा भूरे रंग के घाव पैदा करता है जिनके गहरे केंद्र हैं जो बड़े पैच में मिल जाते हैं।",
@@ -344,7 +383,7 @@ DISEASE_INFO = {
         "cure": {
             "en": "Use Carbendazim fungicide where appropriate. Prune affected areas. Dispose of fallen debris.",
             "hi": "जहां उपयुक्त हो कार्बेंडाजिम कवकनाशी का उपयोग करें। प्रभावित क्षेत्रों को काटें। गिरी हुई मलबे का निपटान करें।",
-            "as": "যেখানে উপযুক্ত কার্বেন্ডাজিম কৰ্কটনাশী ব্যবহাৰ কৰক। প্ৰভাৱিত এলাকা কাটক। পৰিত্যক্ত ধ্বংসাৱশেষ নিষ্পত্তি কৰক।",
+            "as": "যেখানে উপযুক্ত কার্বেন্ডাজিম কৰ্কটনাশী ব্যবহাৰ কৰক। প্ৰভাৱিত এলাকা কাটক। পরিত্যক্ত ধ্বংসাৱশেষ নিষ্পত্তি কৰক।",
             "sa": "जहां उपयुक्त हो कार्बेंडाजिम कवकनाशी का उपयोग करें। प्रभावित क्षेत्रों को काटें। गिरी हुई मलबे का निपटान करें।",
         },
         "prevention": {
@@ -355,9 +394,9 @@ DISEASE_INFO = {
         },
     },
     "Healthy_leaf": {
-        "severity": "low",
+        "severity": "none",
         "what_is": {
-            "en": "This leaf appears healthy with uniform green color and no visible lesions.",
+            "en": "This leaf appears healthy with uniform green colour and no visible lesions.",
             "hi": "यह पत्ती समान हरे रंग के साथ स्वस्थ दिखाई देती है और कोई दृश्यमान घाव नहीं हैं।",
             "as": "এই পাতটি একীভূত সবুজ ৰঙ সহ স্বাস্থ্যকৰ দেখাচ্ছে আৰু কোনো দৃশ্যমান ক্ষত নেই।",
             "sa": "यह पत्ती समान हरे रंग के साथ स्वस्थ दिखाई देती है और कोई दृश्यमान घाव नहीं हैं।",
@@ -383,7 +422,7 @@ DISEASE_INFO = {
         "prevention": {
             "en": "Balanced fertilization, proper drainage, and regular inspection.",
             "hi": "संतुलित खाद, उचित जल निकास, और नियमित निरीक्षण।",
-            "as": "সুষম সার, সঠিক জল निकाশন, আৰু নিয়মিত পরিদর্শন।",
+            "as": "সুষম সার, সঠিক জল নিকাশন, আৰু নিয়মিত পরিদর্শন।",
             "sa": "संतुलित खाद, उचित जल निकास, और नियमित निरीक्षण।",
         },
     },
@@ -404,7 +443,7 @@ DISEASE_INFO = {
         "causes": {
             "en": "Excessive shade, heavy weed presence, dense planting, and lack of field sanitation.",
             "hi": "अत्यधिक छाया, भारी खरपतवार की उपस्थिति, घनी बुवाई, और खेत की स्वच्छता की कमी।",
-            "as": "অতিরিক্ত ছাঁ, ভারী বন্য উপস্থিति, ঘন রোপণ, আৰু খেতৰ স্বাস্থ্যবিধিৰ অভাৱ।",
+            "as": "অতিরিক্ত ছাঁ, ভারী বন্য উপস্থিতি, ঘন রোপণ, আৰু খেতৰ স্বাস্থ্যবিধিৰ অভাৱ।",
             "sa": "अत्यधिक छाया, भारी खरपतवार की उपस्थिति, घनी बुवाई, और खेत की स्वच्छता की कमी।",
         },
         "cure": {
@@ -430,9 +469,9 @@ DISEASE_INFO = {
         },
         "spread": {
             "en": "Can spread as dust or spores under dry, windy conditions affecting large areas quickly.",
-            "hi": "सूखी, हवादार परिस्थितियों में धूल या बीजाणु के रूप में फैल सकता है और बड़े क्षेत्रों को तेजी से प्रभावित करता है।",
-            "as": "শুকান, বায়ুৱহ অৱস্থাত ধূলি বা বীজাণু হিসাবে ছড়াই পাৰে আৰু বড় এলাকাক দ্রুত প্ৰভাৱিত কৰে।",
-            "sa": "सूखी, हवादार परिस्थितियों में धूल या बीजाणु के रूप में फैल सकता है और बड़े क्षेत्रों को तेजी से प्रभावित करता है।",
+            "hi": "सूखी, हवादार परिस्थितियों में धूल या बीजाणु के रूप में फैल सकता है।",
+            "as": "শুকান, বায়ুৱহ অৱস্থাত ধূলি বা বীজাণু হিসাবে ছড়াই পাৰে।",
+            "sa": "सूखी, हवादार परिस्थितियों में धूल या बीजाणु के रूप में फैल सकता है।",
         },
         "causes": {
             "en": "Waterlogged soils, weak or stressed plants, low potash levels, and poor air circulation.",
@@ -441,15 +480,15 @@ DISEASE_INFO = {
             "sa": "जलभराव वाली मिट्टी, कमजोर या तनावग्रस्त पौधे, कम पोटाश स्तर, और खराब वायु संचार।",
         },
         "cure": {
-            "en": "Use appropriate fungicide or algaecide as recommended. Remove affected material. Improve drainage and soil health.",
-            "hi": "अनुशंसित कवकनाशी या शैवाल नाशी का उपयोग करें। प्रभावित सामग्री को हटाएं। जल निकास और मिट्टी के स्वास्थ्य में सुधार करें।",
-            "as": "অনুমোদিত কৰ্কটনাশী বা শৈবাল নাশী ব্যবহাৰ কৰক। প্ৰভাৱিত সামগ্রী আঁতৰাওক। জল নির্কাশন আৰু মাটি স্বাস্থ্য উন্নত কৰক।",
-            "sa": "अनुशंसित कवकनाशी या शैवाल नाशी का उपयोग करें। प्रभावित सामग्री को हटाएं। जल निकास और मिट्टी के स्वास्थ्य में सुधार करें।",
+            "en": "Use appropriate fungicide or algaecide as recommended. Remove affected material. Improve drainage.",
+            "hi": "अनुशंसित कवकनाशी या शैवाल नाशी का उपयोग करें। प्रभावित सामग्री को हटाएं। जल निकास में सुधार करें।",
+            "as": "অনুমোদিত কৰ্কটনাশী বা শৈবাল নাশী ব্যবহাৰ কৰক। প্ৰভাৱিত সামগ্রী আঁতৰাওক। জল নিৰ্কাশন উন্নত কৰক।",
+            "sa": "अनुशंसित कवकनाशी या शैवाल नाशी का उपयोग करें। प्रभावित सामग्री को हटाएं। जल निकास में सुधार करें।",
         },
         "prevention": {
             "en": "Improve drainage, maintain balanced fertilization with potash, practice good field hygiene.",
             "hi": "जल निकास में सुधार करें, पोटाश के साथ संतुलित खाद बनाए रखें, अच्छी खेत स्वच्छता का अभ्यास करें।",
-            "as": "জল नির্কাশনে উন্নতি কৰক, পোটাশৰ সৈতে সুষম সার বজায় ৰাখক, ভাল খেত স্বাস্থ্যবিধি অনুশীলন কৰক।",
+            "as": "জল নিৰ্কাশনে উন্নতি কৰক, পোটাশৰ সৈতে সুষম সার বজায় ৰাখক, ভাল খেত স্বাস্থ্যবিধি অনুশীলন কৰক।",
             "sa": "जल निकास में सुधार करें, पोटाश के साथ संतुलित खाद बनाए रखें, अच्छी खेत स्वच्छता का अभ्यास करें।",
         },
     },
@@ -491,25 +530,25 @@ DISEASE_INFO = {
         "what_is": {
             "en": "Sunlight scorching is non-biological leaf burn from intense sun and heat, not a disease.",
             "hi": "धूप का झुलसा तीव्र सूर्य और गर्मी से गैर-जैविक पत्ती की जलन है, रोग नहीं।",
-            "as": "ৰ'দত পোৰা তীব্ৰ সূৰ্য আৰু গর্মত পৰা গैर-জৈব পাত বিনাশ, ৰোগ নহয়।",
+            "as": "ৰ'দত পোৰা তীব্ৰ সূৰ্য আৰু গর্মত পৰা গৈৰ-জৈব পাত বিনাশ, ৰোগ নহয়।",
             "sa": "धूप का झुलसा तीव्र सूर्य और गर्मी से गैर-जैविक पत्ती की जलन है, रोग नहीं।",
         },
         "spread": {
             "en": "Not contagious; affects exposed plants during heatwaves when shade is insufficient.",
             "hi": "संक्रामक नहीं; जब छाया अपर्याप्त हो तो लू के दौरान उजागर पौधों को प्रभावित करता है।",
-            "as": "সংক্ৰামক নহয়; যেতিয়া ছাঁ অপৰ্যাপ্ত হয় তেতিয়া তাপপ্ৰবাহৰ সময়ত উন্মুক্ত গছক প্ৰभাৱিত কৰে।",
+            "as": "সংক্ৰামক নহয়; যেতিয়া ছাঁ অপৰ্যাপ্ত হয় তেতিয়া তাপপ্ৰবাহৰ সময়ত উন্মুক্ত গছক প্ৰভাৱিত কৰে।",
             "sa": "संक्रामक नहीं; जब छाया अपर्याप्त हो तो लू के दौरान उजागर पौधों को प्रभावित करता है।",
         },
         "causes": {
-            "en": "Lack of shade, extreme heat over 38°C, south-facing exposure, tender growth in harsh sun.",
-            "hi": "छाया की कमी, 38°C से अधिक चरम गर्मी, दक्षिण-सामना करने वाला संपर्क, कठोर धूप में कोमल वृद्धि।",
-            "as": "ছাঁৰ অভাৱ, 38°C তকৈ অধিক চৰম উষ্ণতা, দক্ষিণ-সামনা সংস্পৰ্শ, কঠোৰ ৰ'দত কোমল বৃদ্ধি।",
-            "sa": "छाया की कमी, 38°C से अधिक चरम गर्मी, दक्षिण-सामना करने वाला संपर्क, कठोर धूप में कोमल वृद्धि।",
+            "en": "Lack of shade, extreme heat over 38 C, south-facing exposure, tender growth in harsh sun.",
+            "hi": "छाया की कमी, 38 C से अधिक चरम गर्मी, दक्षिण-सामना करने वाला संपर्क, कठोर धूप में कोमल वृद्धि।",
+            "as": "ছাঁৰ অভাৱ, 38 C তকৈ অধিক চৰম উষ্ণতা, দক্ষিণ-সামনা সংস্পৰ্শ, কঠোৰ ৰ'দত কোমল বৃদ্ধি।",
+            "sa": "छाया की कमी, 38 C से अधिक चरम गर्मी, दक्षिण-सामना करने वाला संपर्क, कठोर धूप में कोमल वृद्धि।",
         },
         "cure": {
             "en": "Remove severely scorched leaves. Provide temporary shade. Monitor for secondary fungal infections.",
             "hi": "बहुत अधिक झुलसी पत्तियों को हटाएं। अस्थायी छाया प्रदान करें। माध्यमिक कवक संक्रमण के लिए निगरानी करें।",
-            "as": "গুৰুতৰভাৱে পোৰা পাত আঁতৰাওক। অস্থায়ী ছাঁ প্ৰদান কৰক। माध्यमिক कवक सংक्रमणৰ জন्য নिরীक্ষণ কৰক।",
+            "as": "গুৰুতৰভাৱে পোৰা পাত আঁতৰাওক। অস্থায়ী ছাঁ প্ৰদান কৰক। মাধ্যমিক কবক সংক্ৰমণৰ বাবে নিৰীক্ষণ কৰক।",
             "sa": "बहुत अधिक झुलसी पत्तियों को हटाएं। अस्थायी छाया प्रदान करें। माध्यमिक कवक संक्रमण के लिए निगरानी करें।",
         },
         "prevention": {
@@ -517,173 +556,281 @@ DISEASE_INFO = {
             "hi": "दो-स्तरीय छाया लगाएं (ऊंचे और छोटे पेड़)। मिट्टी को सूखी घास से ढकें। चरम गर्मी में सिंचाई करें।",
             "as": "দুই-স্তৰীয় ছাঁ লগাওক (ওখ আৰু চুটি গছ)। মাটি শুকান ঘাঁহেৰে ঢাকক। চৰম উষ্ণতাত সিঞ্চন কৰক।",
             "sa": "दो-स्तरीय छाया लगाएं (ऊंचे और छोटे पेड़)। मिट्टी को सूखी घास से ढकें। चरम गर्मी में सिंचाई करें।",
-        }
-    }
+        },
+    },
 }
 
-SEVERITY_COLORS = {"low": "green", "medium": "orange", "high": "red", "critical": "darkred"}
+SEVERITY_COLORS = {
+    "none": "#22c55e", "low": "#84cc16",
+    "medium": "#f59e0b", "high": "#ef4444", "critical": "#991b1b",
+}
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
 def get_text(key, lang="en"):
-    """Get translated text for a key, fallback to English if not found"""
-    if key in TRANSLATIONS:
-        return TRANSLATIONS[key].get(lang, TRANSLATIONS[key].get("en", key))
-    return key
+    """Get translated text, fallback to English."""
+    entry = TRANSLATIONS.get(key, {})
+    return entry.get(lang, entry.get("en", key))
+
 
 def get_disease_name(disease, lang="en"):
-    """Get translated disease name, fallback to English if not found"""
-    if disease in DISEASE_NAMES:
-        return DISEASE_NAMES[disease].get(lang, DISEASE_NAMES[disease].get("en", disease))
-    return disease
+    """Get translated disease name."""
+    entry = DISEASE_NAMES.get(disease, {})
+    return entry.get(lang, entry.get("en", disease))
+
 
 # ============================================================================
-# IMAGE PREPROCESSING
+# IMAGE QUALITY & LEAF CHECK
 # ============================================================================
 
 def assess_image_quality(img):
-    """Check image quality - only reject genuinely bad images"""
+    """Return (score 0-100, issues list, acceptable bool)."""
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    brightness = np.mean(gray)
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-    contrast = gray.std()
-    
+    brightness = float(np.mean(gray))
+    lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    contrast = float(gray.std())
+
     issues = []
-    
-    # Only flag extreme cases for issues display (informational only)
     if brightness < 15:
         issues.append("Very dark")
     elif brightness > 240:
         issues.append("Very bright")
-    
-    # Only flag if EXTREMELY blurry (< 10) - this is a serious issue
-    if laplacian_var < 10:
+    if lap_var < 10:
         issues.append("Extremely blurry")
-    
-    # Only flag if no contrast at all (< 5)
     if contrast < 5:
         issues.append("No contrast")
-    
-    # Simple quality score based on how "normal" the image is
-    # More lenient: even with minor issues, good images pass
-    quality_score = 100
-    
-    # Deduct points only for serious issues
-    if laplacian_var < 10:
-        quality_score -= 30  # Extremely blurry
+
+    score = 100
+    if lap_var < 10:
+        score -= 30
     if brightness < 15 or brightness > 240:
-        quality_score -= 20  # Extreme lighting
+        score -= 20
     if contrast < 5:
-        quality_score -= 20  # No contrast
-    
-    quality_score = max(0, quality_score)
-    
-    # Accept image if quality >= 35 (only reject genuinely bad images)
-    acceptable = quality_score >= 35 and laplacian_var >= 8 and brightness > 10 and contrast > 3
-    
-    return quality_score, issues, acceptable, laplacian_var
+        score -= 20
+    score = max(0, score)
+    acceptable = score >= 35 and lap_var >= 8 and brightness > 10 and contrast > 3
+    return score, issues, acceptable
 
-def denoise_image(img):
-    return cv2.fastNlMeansDenoisingColored(img, None, h=7, hColor=7, 
-                                            templateWindowSize=7, searchWindowSize=21)
-
-def correct_lighting(img):
-    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    l_clahe = clahe.apply(l)
-    lab_clahe = cv2.merge([l_clahe, a, b])
-    return cv2.cvtColor(lab_clahe, cv2.COLOR_LAB2RGB)
-
-def preprocess_image(img):
-    img = denoise_image(img)
-    img = correct_lighting(img)
-    return img
 
 def check_if_leaf(img):
-    """
-    Background-aware tea leaf detection
-    - Ignores white background by calculating ratio on leaf area only
-    - Accepts healthy green, yellowed (sunlight scorching), and brown (disease) leaves
-    - Rejects faces/non-plant objects through saturation analysis
-    """
+    """Background-aware tea leaf detection (permissive)."""
     try:
         hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
         h, w = hsv.shape[:2]
+        total = h * w
 
-        # Step 1: Remove white background (bright areas)
-        lower_white = np.array([0, 0, 200])
-        upper_white = np.array([180, 60, 255])
-        white_mask = cv2.inRange(hsv, lower_white, upper_white)
-        non_white_mask = cv2.bitwise_not(white_mask)
-        non_white_pixels = np.sum(non_white_mask > 0)
-
-        # If too little non-white content, likely not a leaf (mostly blank)
-        if non_white_pixels < (h * w * 0.03):
+        # Remove white background
+        white_mask = cv2.inRange(hsv, (0, 0, 200), (180, 60, 255))
+        fg_mask = cv2.bitwise_not(white_mask)
+        fg_px = max(int(np.sum(fg_mask > 0)), 1)
+        if fg_px < total * 0.03:
             return False
 
-        # Step 2: Color-based plant masks (for green, yellow/scorch, brown/red)
-        lower_green = np.array([20, 25, 20])
-        upper_green = np.array([95, 255, 255])
-        green_mask = cv2.inRange(hsv, lower_green, upper_green)
+        # Plant-colour masks
+        green = cv2.inRange(hsv, (20, 25, 20), (95, 255, 255))
+        yellow = cv2.inRange(hsv, (10, 25, 30), (45, 255, 255))
+        red1 = cv2.inRange(hsv, (0, 20, 30), (15, 255, 255))
+        red2 = cv2.inRange(hsv, (160, 20, 30), (180, 255, 255))
+        plant = green | yellow | red1 | red2
+        plant_ratio = np.sum(cv2.bitwise_and(plant, fg_mask) > 0) / fg_px * 100
 
-        lower_yellow = np.array([10, 25, 30])
-        upper_yellow = np.array([45, 255, 255])
-        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        # Edges
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 30, 120)
+        edge_ratio = np.sum(cv2.bitwise_and(edges, fg_mask) > 0) / fg_px * 100
+        lap_var = float(np.var(cv2.Laplacian(gray, cv2.CV_64F)[fg_mask > 0]))
 
-        lower_red1 = np.array([0, 20, 30])
-        upper_red1 = np.array([15, 255, 255])
-        red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-        lower_red2 = np.array([160, 20, 30])
-        upper_red2 = np.array([180, 255, 255])
-        red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        # Skin heuristic
+        skin = cv2.inRange(hsv, (0, 10, 60), (25, 200, 255))
+        skin_ratio = np.sum(cv2.bitwise_and(skin, fg_mask) > 0) / fg_px * 100
 
-        plant_mask = green_mask | yellow_mask | red_mask1 | red_mask2
-        plant_pixels_in_leaf = np.sum(cv2.bitwise_and(plant_mask, non_white_mask) > 0)
-        plant_ratio = (plant_pixels_in_leaf / non_white_pixels) * 100 if non_white_pixels > 0 else 0
-
-        # Step 3: Structural analysis - edges and texture (veins, sharp lines)
-        img_uint8 = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
-        gray = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blurred, 30, 120)
-        edges_masked = cv2.bitwise_and(edges, edges, mask=non_white_mask)
-        edge_pixels = np.sum(edges_masked > 0)
-        edge_ratio = (edge_pixels / non_white_pixels) * 100 if non_white_pixels > 0 else 0
-
-        lap = cv2.Laplacian(blurred, cv2.CV_64F)
-        lap_var = float(np.var(lap[non_white_mask > 0])) if non_white_pixels > 0 else 0.0
-
-        # Step 4: Skin/face heuristic - simple HSV skin detection to avoid selfies
-        lower_skin = np.array([0, 10, 60])
-        upper_skin = np.array([25, 200, 255])
-        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
-        skin_pixels = np.sum(cv2.bitwise_and(skin_mask, skin_mask, mask=non_white_mask) > 0)
-        skin_ratio = (skin_pixels / non_white_pixels) * 100 if non_white_pixels > 0 else 0
-
-        # Saturation check (faces generally lower saturation than waxy leaves)
-        s_channel = hsv[:, :, 1]
-        non_white_saturation = s_channel[non_white_mask > 0]
-        avg_saturation = float(np.mean(non_white_saturation)) if len(non_white_saturation) > 0 else 0.0
-
-        # Decision logic (more permissive to accept scorched/brown leaves):
-        # - Color-accepted: plant_ratio >= 12 and avg_saturation >= 10
-        # - Structural-accepted: edge_ratio >= 2 (percent) and lap_var >= 10
-        # - Final accept if either condition holds, unless strong face evidence
-        color_ok = (plant_ratio >= 12 and avg_saturation >= 10)
-        struct_ok = (edge_ratio >= 2.0 and lap_var >= 10.0)
-
-        # Face rejection: higher skin ratio and low structural signal
-        face_like = (skin_ratio >= 25.0 and edge_ratio < 2.0 and lap_var < 10.0)
-
-        is_leaf = (color_ok or struct_ok) and (not face_like)
-
-        return bool(is_leaf)
+        color_ok = plant_ratio >= 12
+        struct_ok = edge_ratio >= 2.0 and lap_var >= 10.0
+        face_like = skin_ratio >= 25 and edge_ratio < 2 and lap_var < 10
+        return (color_ok or struct_ok) and not face_like
     except Exception:
-        # Conservative fallback: allow image through so model confidence can decide
-        return True
+        return True  # let the model decide
+
+
+# ============================================================================
+# IMAGE PREPROCESSING (light denoise + CLAHE)
+# ============================================================================
+
+def preprocess_image(img):
+    img = cv2.fastNlMeansDenoisingColored(img, None, h=7, hColor=7,
+                                           templateWindowSize=7, searchWindowSize=21)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    lab = cv2.merge([clahe.apply(l_ch), a_ch, b_ch])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+
+
+# ============================================================================
+# FEATURE EXTRACTORS  -  exact mirror of tea_train_v3_6 notebook
+# ============================================================================
+
+def extract_color_features(img_float):
+    """
+    8-channel colour feature map (v3.6).
+    Input : float32 [H,W,3] in [0,1], RGB.
+    Output: float32 [H,W,8].
+    Channels: H, S, CLAHE-L*, a*, b*, ExG, a*/b*, R/G
+    """
+    img_u8 = np.clip(img_float * 255, 0, 255).astype(np.uint8)
+    hsv = cv2.cvtColor(img_u8, cv2.COLOR_RGB2HSV).astype(np.float32)
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    H = hsv[:, :, 0] / 180.0
+    S = hsv[:, :, 1] / 255.0
+
+    L_star = lab[:, :, 0]
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    L_clahe = clahe.apply(L_star.astype(np.uint8)).astype(np.float32) / 255.0
+
+    a_star = lab[:, :, 1] / 255.0
+    b_star = lab[:, :, 2] / 255.0
+
+    R, G, B = img_float[:, :, 0], img_float[:, :, 1], img_float[:, :, 2]
+    ExG = np.clip(2 * G - R - B, -1, 1)
+
+    ab_ratio = np.where(
+        np.abs(b_star) > 0.01,
+        np.clip(a_star / (b_star + 1e-8), -2, 2) / 4 + 0.5,
+        0.5,
+    )
+    rg_ratio = np.where(
+        G > 0.01,
+        np.clip(R / (G + 1e-8), 0, 4) / 4,
+        0.5,
+    )
+
+    return np.stack(
+        [H, S, L_clahe, a_star, b_star, ExG, ab_ratio, rg_ratio], axis=-1
+    ).astype(np.float32)
+
+
+def extract_texture_features(img_float):
+    """
+    11-channel texture feature map (v3.6).
+    Input : float32 [H,W,3] in [0,1], RGB.
+    Output: float32 [H,W,11].
+    Channels:
+      0  Gray              5  MorphGrad          10 HueWeightedEdge
+      1  Canny             6  CLAHE gray
+      2  Gabor 0 deg       7  Lesion density
+      3  Gabor 45 deg      8  LBP gray
+      4  Local std-dev     9  LBP a*
+    """
+    img_u8 = np.clip(img_float * 255, 0, 255).astype(np.uint8)
+    gray = cv2.cvtColor(img_u8, cv2.COLOR_RGB2GRAY)
+    gray_f = gray.astype(np.float32) / 255.0
+
+    # Canny
+    canny = cv2.Canny(gray, 50, 150).astype(np.float32) / 255.0
+
+    # Gabor (0 deg, 45 deg)
+    gabor_out = []
+    for theta in [0, np.pi / 4]:
+        kern = cv2.getGaborKernel((21, 21), sigma=4.0, theta=theta,
+                                   lambd=10.0, gamma=0.5, psi=0)
+        resp = cv2.filter2D(gray, cv2.CV_32F, kern)
+        resp = np.clip(np.abs(resp) / (np.abs(resp).max() + 1e-8), 0, 1)
+        gabor_out.append(resp)
+
+    # Local std-dev
+    mu = cv2.blur(gray_f, (7, 7))
+    sq = cv2.blur(gray_f ** 2, (7, 7))
+    local_std = np.sqrt(np.clip(sq - mu ** 2, 0, None))
+    local_std = local_std / (local_std.max() + 1e-8)
+
+    # Morphological gradient
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    morph_grad = cv2.morphologyEx(gray, cv2.MORPH_GRADIENT, kernel).astype(np.float32) / 255.0
+
+    # CLAHE gray
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    clahe_gray = clahe.apply(gray).astype(np.float32) / 255.0
+
+    # Lesion density (brown-ish mask blurred)
+    hsv = cv2.cvtColor(img_u8, cv2.COLOR_RGB2HSV)
+    brown_mask = cv2.inRange(hsv, (8, 60, 40), (30, 255, 200))
+    lesion = cv2.blur(brown_mask.astype(np.float32) / 255.0, (15, 15))
+
+    # LBP on grayscale
+    if HAS_LBP:
+        lbp_gray = local_binary_pattern(gray, P=LBP_POINTS, R=LBP_RADIUS,
+                                         method="uniform").astype(np.float32) / (LBP_POINTS + 2)
+    else:
+        # Fallback: approximate LBP with local variance
+        lbp_gray = local_std.copy()
+
+    # LBP on a* channel
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_RGB2LAB)
+    a_star = lab[:, :, 1]
+    if HAS_LBP:
+        lbp_a = local_binary_pattern(a_star, P=LBP_POINTS, R=LBP_RADIUS,
+                                      method="uniform").astype(np.float32) / (LBP_POINTS + 2)
+    else:
+        a_f = a_star.astype(np.float32) / 255.0
+        mu_a = cv2.blur(a_f, (7, 7))
+        sq_a = cv2.blur(a_f ** 2, (7, 7))
+        lbp_a = np.sqrt(np.clip(sq_a - mu_a ** 2, 0, None))
+        lbp_a = lbp_a / (lbp_a.max() + 1e-8)
+
+    # Hue-weighted edge magnitude (saturation x Sobel)
+    sx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    sy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    edge_mag = np.sqrt(sx ** 2 + sy ** 2)
+    edge_mag = edge_mag / (edge_mag.max() + 1e-8)
+    sat = hsv[:, :, 1].astype(np.float32) / 255.0
+    hue_edge = edge_mag * sat
+    hue_edge = hue_edge / (hue_edge.max() + 1e-8)
+
+    return np.stack([
+        gray_f, canny, gabor_out[0], gabor_out[1],
+        local_std, morph_grad, clahe_gray, lesion,
+        lbp_gray, lbp_a, hue_edge,
+    ], axis=-1).astype(np.float32)
+
+
+# ============================================================================
+# POST-HOC REFINEMENT  (temperature scaling + per-class thresholds)
+# ============================================================================
+
+@st.cache_data
+def load_refinement_config():
+    """Load refined_tflite_config.json -> (temperature, thresholds_array)."""
+    for p in [REFINE_CFG_PATH, REFINE_CFG_LOCAL]:
+        if p.exists():
+            cfg = json.loads(p.read_text())
+            temp = float(cfg.get("temperature", 1.0))
+            thresh = cfg.get("thresholds_array", [0.5] * 7)
+            return temp, np.array(thresh, dtype=np.float32)
+    return 1.0, np.ones(7, dtype=np.float32) * 0.5
+
+
+def apply_refinement(raw_probs, temperature, thresholds):
+    """
+    Post-hoc refinement matching training notebook Cell 26.
+    1) logits = log(probs)   2) scale = logits / T
+    3) softmax               4) divide by thresholds
+    5) re-normalise
+    """
+    probs = np.clip(raw_probs, 1e-8, 1.0)
+    logits = np.log(probs)
+    scaled = logits / temperature
+    # Numerically stable softmax
+    shifted = scaled - scaled.max()
+    exp_s = np.exp(shifted)
+    calibrated = exp_s / (exp_s.sum() + 1e-8)
+    # Threshold gating
+    adjusted = calibrated / (thresholds + 1e-8)
+    adjusted = adjusted / (adjusted.sum() + 1e-8)
+    return adjusted
+
 
 # ============================================================================
 # TFLITE MODEL LOADING & PREDICTION
@@ -691,503 +838,421 @@ def check_if_leaf(img):
 
 @st.cache_resource
 def load_tflite_model():
-    """Load TFLite model with detailed error reporting"""
+    """Load the v3.6 TFLite model (tri-branch fusion)."""
     try:
         import tensorflow as tf
-    except Exception as e:
-        st.warning("TensorFlow not available - running in demo mode")
-        return None, "tf_missing"
+    except ImportError:
+        try:
+            from tflite_runtime.interpreter import Interpreter as TFInterpreter
+            for p in [TFLITE_PATH, TFLITE_PATH_LOCAL]:
+                if p.exists():
+                    interp = TFInterpreter(str(p))
+                    interp.allocate_tensors()
+                    return interp, "tflite"
+            return None, "model_missing"
+        except ImportError:
+            return None, "tf_missing"
 
-    model_path = "tea_doctor_v7_final.tflite"
+    for p in [TFLITE_PATH, TFLITE_PATH_LOCAL]:
+        if p.exists():
+            try:
+                interp = tf.lite.Interpreter(model_path=str(p))
+                interp.allocate_tensors()
+                return interp, "tflite"
+            except Exception as e:
+                st.error(f"Failed to load model from {p}: {e}")
+                return None, "load_error"
 
-    if not Path(model_path).exists():
-        st.info(f"ℹ️ Model file '{model_path}' not found. Running in demo mode. Place the model file for real predictions.")
-        return None, "model_missing"
+    return None, "model_missing"
 
-    try:
-        interpreter = tf.lite.Interpreter(model_path=model_path)
-        interpreter.allocate_tensors()
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        st.success(f"✅ TFLite model loaded: {len(input_details)} inputs, {len(output_details)} outputs")
-        return interpreter, "tflite"
-    except Exception as e:
-        st.error(f"Failed to load model: {str(e)}")
-        return None, "load_error"
 
-def extract_color_features(img):
-    """Extract LAB + HSV color features"""
-    img_uint8 = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
-    lab = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2LAB)
-    hsv = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2HSV)
-    features = np.stack([lab[:, :, 1], hsv[:, :, 1], lab[:, :, 0]], axis=-1).astype(np.float32) / 255.0
-    return features
+def predict_disease(img, interpreter):
+    """
+    Run the tri-branch TFLite model.
+    Returns (class_name, confidence_pct, probs_array).
+    """
+    img_224 = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+    img_f = img_224.astype(np.float32) / 255.0
 
-def extract_texture_features(img):
-    """Extract edge/texture features"""
-    img_uint8 = (img * 255).astype(np.uint8) if img.max() <= 1.0 else img.astype(np.uint8)
-    gray = cv2.cvtColor(img_uint8, cv2.COLOR_RGB2GRAY)
-    sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-    sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-    edges = np.sqrt(sobel_x**2 + sobel_y**2)
-    edges = np.clip(edges, 0, 255).astype(np.uint8)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    laplacian = np.abs(laplacian).clip(0, 255).astype(np.uint8)
-    features = np.stack([gray, edges, laplacian], axis=-1).astype(np.float32) / 255.0
-    return features
+    # Prepare three inputs
+    rgb_input = np.expand_dims(img_224, 0).astype(np.uint8)             # [1,224,224,3]
+    color_input = np.expand_dims(extract_color_features(img_f), 0)      # [1,224,224,8]
+    texture_input = np.expand_dims(extract_texture_features(img_f), 0)  # [1,224,224,11]
 
-def predict_disease_tflite(img, interpreter, model_type):
-    """Predict disease using TFLite"""
-    # Model outputs 7 classes
-    CLASS_NAMES = [
-        'Brown_Blight', 'Gray_Blight', 'Healthy_leaf', 
-        'Helopeltis', 'Red_Rust', 'Red_spider', 'Sunlight_Scorching'
-    ]
-    
-    # Check for demo mode
-    demo_mode = st.session_state.get("demo_mode", False)
-    demo_seed = st.session_state.get("demo_seed", None)
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
 
-    if demo_mode:
-        import random
-        rng = random.Random(demo_seed)
-        pred_class = rng.choice(CLASS_NAMES)
-        confidence = float(rng.uniform(50.0, 95.0))
-        all_probs = [float(rng.uniform(0.0, 20.0)) for _ in CLASS_NAMES]
-        max_idx = CLASS_NAMES.index(pred_class)
-        all_probs[max_idx] = confidence
-        return pred_class, confidence, all_probs
+    # Map inputs by tensor name
+    for det in input_details:
+        name = det["name"].lower()
+        if "texture" in name:
+            interpreter.set_tensor(det["index"], texture_input.astype(det["dtype"]))
+        elif "rgb" in name:
+            interpreter.set_tensor(det["index"], rgb_input.astype(det["dtype"]))
+        elif "color" in name:
+            interpreter.set_tensor(det["index"], color_input.astype(det["dtype"]))
 
-    if model_type != "tflite" or interpreter is None:
-        # Model not available - show warning instead of random predictions
-        st.warning("⚠️ TFLite model not loaded. Running in demo mode.")
-        # Still return predictions but with lower confidence ranges
-        import random
-        pred_class = random.choice(CLASS_NAMES)
-        confidence = float(random.uniform(30, 60))  # Lower confidence to indicate demo
-        all_probs = [float(random.uniform(5, 25)) for _ in CLASS_NAMES]
-        max_idx = CLASS_NAMES.index(pred_class)
-        all_probs[max_idx] = confidence
-        return pred_class, confidence, all_probs
-    
-    # Prepare inputs - match model expectations exactly
-    img_resized = cv2.resize(img, (224, 224))
-    
-    # Input 1: RGB image as UINT8 [0-255] - NOT normalized
-    rgb_input = np.expand_dims(img_resized, axis=0).astype(np.uint8)
-    
-    # Input 2: Color features as FLOAT32 [0-1]
-    color_input = np.expand_dims(extract_color_features(img_resized / 255.0), axis=0).astype(np.float32)
-    
-    # Input 3: Texture features as FLOAT32 [0-1]
-    texture_input = np.expand_dims(extract_texture_features(img_resized / 255.0), axis=0).astype(np.float32)
-    
-    try:
-        input_details = interpreter.get_input_details()
-        output_details = interpreter.get_output_details()
-        
-        # Validate input tensor count
-        if len(input_details) < 3:
-            st.error(f"Model expects {len(input_details)} input(s) but 3 were provided.")
-            return CLASS_NAMES[0], 25.0, [25.0] * len(CLASS_NAMES)
+    interpreter.invoke()
 
-        # Set tensors in the CORRECT MODEL ORDER:
-        # Input 0: texture_input (FLOAT32)
-        # Input 1: rgb_input (UINT8)
-        # Input 2: color_input (FLOAT32)
-        
-        # Map inputs by name to handle any order
-        input_map = {}
-        for detail in input_details:
-            name = detail['name']
-            if 'texture' in name.lower():
-                input_map[detail['index']] = texture_input.astype(detail['dtype'])
-            elif 'rgb' in name.lower():
-                input_map[detail['index']] = rgb_input.astype(detail['dtype'])
-            elif 'color' in name.lower():
-                input_map[detail['index']] = color_input.astype(detail['dtype'])
-        
-        # Set all tensors
-        for index, data in input_map.items():
-            interpreter.set_tensor(index, data)
+    probs = interpreter.get_tensor(output_details[0]["index"])[0]
+    probs = np.clip(probs, 0, 1)
+    if probs.sum() < 0.01:
+        probs = np.ones(7) / 7  # safety fallback
 
-        # Debug: Show input data statistics
-        with st.expander("🔍 Debug: Input Data Statistics"):
-            st.write(f"**RGB Input** - Max: {rgb_input.max()}, Min: {rgb_input.min()}, Mean: {rgb_input.mean():.2f}")
-            st.write(f"**Color Input** - Max: {color_input.max():.2f}, Min: {color_input.min():.2f}, Mean: {color_input.mean():.2f}")
-            st.write(f"**Texture Input** - Max: {texture_input.max():.2f}, Min: {texture_input.min():.2f}, Mean: {texture_input.mean():.2f}")
-            st.info("✓ RGB: 0-255 expected (no Rescaling layer) | Color/Texture: 0-1 (normalized)")
+    idx = int(np.argmax(probs))
+    return CLASS_NAMES[idx], float(probs[idx] * 100), probs
 
-        interpreter.invoke()
-
-        predictions = interpreter.get_tensor(output_details[0]['index'])[0]
-        
-        # Validate predictions
-        if predictions is None or len(predictions) == 0:
-            st.error("Model returned empty predictions")
-            return CLASS_NAMES[0], 25.0, [25.0] * len(CLASS_NAMES)
-
-        # Handle mismatch between model outputs and CLASS_NAMES
-        num_outputs = len(predictions)
-        num_classes = len(CLASS_NAMES)
-        
-        if num_outputs != num_classes:
-            st.warning(f"⚠️ Model outputs {num_outputs} classes but expected {num_classes}. Adjusting...")
-            # Pad or trim predictions to match number of classes
-            if num_outputs < num_classes:
-                # Pad with zeros
-                predictions = np.concatenate([predictions, np.zeros(num_classes - num_outputs)])
-            else:
-                # Trim to expected number
-                predictions = predictions[:num_classes]
-        
-        max_idx = int(np.argmax(predictions))
-        pred_class = CLASS_NAMES[max_idx]
-        confidence = float(predictions[max_idx] * 100.0)
-        all_probs = (predictions * 100.0).astype(float).tolist()
-
-        confidence = float(np.clip(confidence, 0.0, 100.0))
-        all_probs = [float(np.clip(p, 0.0, 100.0)) for p in all_probs]
-
-        return pred_class, confidence, all_probs
-    except Exception as e:
-        st.error(f"Prediction error: {str(e)}")
-        # Return balanced fallback
-        return CLASS_NAMES[0], 25.0, [25.0] * len(CLASS_NAMES)
 
 # ============================================================================
-# HEATMAP
+# HEATMAP  (edge + texture proxy - no Grad-CAM without full model)
 # ============================================================================
 
-def generate_heatmap(img, model, pred_class):
-    """Generate SmoothGrad-style heatmap for better visualization"""
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY) if len(img.shape) == 3 else img
-    
-    # Detect edges (disease indicators)
-    edges = cv2.Canny(gray, 50, 150)
-    
-    # Calculate Laplacian (texture variations - disease signatures)
-    laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    laplacian = np.abs(laplacian)
-    
-    # Normalize
-    edges_norm = edges.astype(np.float32) / 255.0
-    laplacian_norm = laplacian / (laplacian.max() + 1e-6)
-    
-    # Combine: edges (60%) + texture (40%)
-    heatmap = 0.6 * edges_norm + 0.4 * laplacian_norm
-    
-    # Apply multiple Gaussian blurs for smooth appearance (SmoothGrad style)
+def generate_heatmap(img):
+    """SmoothGrad-style edge/texture heatmap."""
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, 50, 150).astype(np.float32) / 255.0
+    lap = np.abs(cv2.Laplacian(gray, cv2.CV_64F))
+    lap = lap / (lap.max() + 1e-6)
+    heatmap = 0.6 * edges + 0.4 * lap.astype(np.float32)
     for _ in range(3):
         heatmap = cv2.GaussianBlur(heatmap, (31, 31), 2.0)
-    
-    # Normalize to [0, 1]
-    if heatmap.max() > heatmap.min():
-        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+    mn, mx = heatmap.min(), heatmap.max()
+    if mx > mn:
+        heatmap = (heatmap - mn) / (mx - mn)
     else:
         heatmap = np.zeros_like(heatmap)
-    
-    # Enhance contrast slightly for better visibility
-    heatmap = np.power(heatmap, 0.8)
-    
-    return heatmap
+    return np.power(heatmap, 0.8)
+
 
 def overlay_heatmap(img, heatmap, alpha=0.4):
-    """Overlay heatmap on image"""
-    heatmap_resized = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
-    heatmap_colored = cv2.applyColorMap((heatmap_resized * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    heatmap_colored = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-    overlayed = cv2.addWeighted(img, 1-alpha, heatmap_colored, alpha, 0)
-    return overlayed
+    hm = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+    coloured = cv2.applyColorMap((hm * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    coloured = cv2.cvtColor(coloured, cv2.COLOR_BGR2RGB)
+    return cv2.addWeighted(img, 1 - alpha, coloured, alpha, 0)
+
 
 # ============================================================================
 # MAIN APP
 # ============================================================================
 
 def main():
-    # Configure page
-    st.set_page_config(page_title="Tea Doctor", layout="wide")
-    
-    # Sidebar
-    st.sidebar.title("Language")
-    lang = st.sidebar.selectbox(
-        "Select",
-        ["en", "hi", "as", "sa"],
-        format_func=lambda x: {"en": "English", "hi": "हिंदी", "as": "অসমীয়া", "sa": "सादरी"}[x],
+    st.set_page_config(
+        page_title="Tea Doctor v3.6",
+        page_icon="🍵",
+        layout="wide",
+        initial_sidebar_state="expanded",
     )
-    st.session_state.lang = lang
 
-    st.sidebar.markdown("---")
-    demo_mode = st.sidebar.checkbox("Enable demo mode")
-    st.session_state.demo_mode = demo_mode
-    if demo_mode:
-        seed = st.sidebar.number_input("Demo seed", value=42, step=1)
-        st.session_state.demo_seed = int(seed)
-        st.sidebar.info("Demo mode uses fixed seed for reproducible predictions.")
-    
-    st.sidebar.markdown("---")
-    st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ["Home", "About"])
-    
-    # Kill-switch: skip leaf checks (use when you want immediate results)
-    st.sidebar.markdown("---")
-    skip_checks = st.sidebar.checkbox("Kill Switch: Skip Leaf Checks", value=False, help="Skip color/structure checks and rely only on model confidence")
-    st.session_state.skip_checks = skip_checks
-    
-    if page == "Home":
-        show_home_page()
+    # -- Sidebar --
+    with st.sidebar:
+        st.title("🍵 Tea Doctor")
+        st.caption("ECA Tri-Branch Fusion CNN v3.6")
+
+        lang = st.selectbox(
+            "🌐 Language",
+            ["en", "hi", "as", "sa"],
+            format_func=lambda x: {
+                "en": "English", "hi": "हिंदी", "as": "অসমীয়া", "sa": "सादरी"
+            }[x],
+        )
+        st.session_state.lang = lang
+
+        st.divider()
+        page = st.radio("Navigate", ["🏠 Home", "ℹ️ About"], label_visibility="collapsed")
+
+        st.divider()
+        use_refinement = st.toggle("🔬 Post-hoc refinement", value=True,
+                                    help="Temperature scaling + per-class thresholds (improves accuracy by ~1.3%)")
+        st.session_state.use_refinement = use_refinement
+
+        skip_checks = st.toggle("⚡ Skip leaf checks", value=False,
+                                 help="Bypass colour / structure validation")
+        st.session_state.skip_checks = skip_checks
+
+    # -- Pages --
+    if "Home" in page:
+        show_home()
     else:
-        show_about_page()
+        show_about()
 
-def show_home_page():
-    lang = st.session_state.get('lang', 'en')
+
+# -----------------------------------------------------------------------
+# HOME PAGE
+# -----------------------------------------------------------------------
+def show_home():
+    lang = st.session_state.get("lang", "en")
 
     st.title(get_text("home_title", lang))
-    st.markdown("---")
-    
-    model, model_type = load_tflite_model()
-    
-    st.subheader(get_text("upload_image", lang))
-    uploaded_file = st.file_uploader("Choose image", type=['jpg', 'jpeg', 'png'], label_visibility="collapsed")
-    
-    st.markdown("**OR**")
-    
-    # Camera toggle
-    use_camera = st.checkbox("📷 Use Camera", value=False)
-    camera_image = None
-    
-    if use_camera:
-        camera_image = st.camera_input("Take photo")
-    
-    image_source = uploaded_file if uploaded_file else camera_image
-    
-    if image_source:
-        image = Image.open(image_source)
-        img_array = np.array(image)
-        
-        if len(img_array.shape) == 2:
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
-        elif img_array.shape[2] == 4:
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader(get_text("original", lang))
-            st.image(img_array, use_container_width=True)
-        
-        with st.spinner(get_text("preprocessing", lang)):
-            preprocessed = preprocess_image(img_array)
-        
-        with col2:
-            st.subheader(get_text("preprocessed", lang))
-            st.image(preprocessed, use_container_width=True)
-        
-        st.markdown("---")
+    st.caption("Upload or photograph a tea leaf — the AI will identify the disease and recommend treatment.")
+    st.divider()
 
-        # Soft leaf check - warn but don't block (confidence threshold handles hard rejection)
-        skip_checks = st.session_state.get('skip_checks', False)
-        if not skip_checks:
-            leaf_check = check_if_leaf(img_array)
-            if not leaf_check:
-                st.warning("⚠️ This doesn't look like a tea leaf, but proceeding... The confidence threshold will be the final judge.")
-        else:
-            st.info("Kill Switch active: skipping leaf checks")
-        
-        if model is None or model_type != "tflite":
-            st.error("A valid TFLite model is required. Make sure 'tea_doctor_v7_final.tflite' is available.")
+    # Load model
+    interpreter, model_type = load_tflite_model()
+
+    if model_type == "tf_missing":
+        st.error("TensorFlow / tflite-runtime is not installed. "
+                 "Run `pip install tensorflow` or `pip install tflite-runtime`.")
+        st.stop()
+    if model_type == "model_missing":
+        st.error(f"Model file not found.\n\nSearched:\n- `{TFLITE_PATH}`\n- `{TFLITE_PATH_LOCAL}`\n\n"
+                 "Copy `fusion_model_baseline.tflite` to one of these locations.")
+        st.stop()
+    if interpreter is None:
+        st.error("Model failed to load. Check the error above.")
+        st.stop()
+
+    # -- Image input --
+    col_upload, col_camera = st.columns(2)
+    with col_upload:
+        uploaded = st.file_uploader(get_text("upload_image", lang),
+                                     type=["jpg", "jpeg", "png", "webp"])
+    with col_camera:
+        cam_img = st.camera_input("📷 Take a photo")
+
+    source = uploaded or cam_img
+    if not source:
+        st.info("👆 Upload or take a photo to begin.")
+        return
+
+    # -- Load & normalise --
+    image = np.array(Image.open(source))
+    if len(image.shape) == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+    elif image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_RGBA2RGB)
+
+    # -- Display original vs preprocessed --
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader(get_text("original", lang))
+        st.image(image, use_container_width=True)
+
+    with st.spinner(get_text("preprocessing", lang)):
+        preprocessed = preprocess_image(image)
+
+    with c2:
+        st.subheader(get_text("preprocessed", lang))
+        st.image(preprocessed, use_container_width=True)
+
+    st.divider()
+
+    # -- Quality / leaf gate --
+    if not st.session_state.get("skip_checks", False):
+        score, issues, acceptable = assess_image_quality(image)
+        if not acceptable:
+            st.error(f"❌ {get_text('error_blurry', lang)}  (quality {score}/100: {', '.join(issues)})")
             st.stop()
+        if not check_if_leaf(image):
+            st.warning(f"⚠️ {get_text('error_not_leaf', lang)}  Proceeding anyway — confidence threshold will judge.")
 
-        with st.spinner(get_text("analyzing", lang)):
-            pred_class, confidence, all_probs = predict_disease_tflite(preprocessed, model, model_type)
+    # -- Predict --
+    with st.spinner(get_text("analyzing", lang)):
+        pred_class, confidence, raw_probs = predict_disease(preprocessed, interpreter)
 
-        confidence = float(np.clip(float(confidence), 0.0, 100.0))
-        
-        # ⚠️ CONFIDENCE THRESHOLD - PRIMARY GUARD against false positives (selfies, non-leaves)
-        if confidence < 40:
-            st.error(f"❌ **Confidence too low ({confidence:.1f}%)**\n\nThis doesn't appear to be a tea leaf. The model isn't confident.")
-            st.info("💡 Try with: Better lighting, different angle, or a real tea leaf image")
-            st.stop()
+    # -- Optional post-hoc refinement --
+    temperature, thresholds = load_refinement_config()
+    use_ref = st.session_state.get("use_refinement", True)
+    if use_ref:
+        refined_probs = apply_refinement(raw_probs, temperature, thresholds)
+        pred_idx = int(np.argmax(refined_probs))
+        pred_class = CLASS_NAMES[pred_idx]
+        confidence = float(refined_probs[pred_idx] * 100)
+        display_probs = refined_probs * 100
+    else:
+        display_probs = raw_probs * 100
 
-        st.info(get_text("analysis_complete", lang))
+    confidence = float(np.clip(confidence, 0, 100))
 
-        disease_name = get_disease_name(pred_class, lang)
+    # -- Confidence gate --
+    if confidence < 30:
+        st.error(f"❌ Confidence too low ({confidence:.1f}%).  "
+                 "This may not be a tea leaf, or the image quality is poor.")
+        st.info("💡 Try: better lighting, different angle, or a real tea leaf image.")
+        st.stop()
 
-        st.header(disease_name)
+    # -- Results --
+    st.success(get_text("analysis_complete", lang))
+    disease_label = get_disease_name(pred_class, lang)
+
+    # Hero result card
+    res_col1, res_col2 = st.columns([2, 1])
+    with res_col1:
         if "Healthy" in pred_class:
+            st.header(f"🌿 {disease_label}")
             st.success(get_text("healthy_leaf_msg", lang))
-
-        st.subheader(f"{get_text('confidence', lang)}: {confidence:.1f}%")
-        st.progress(confidence / 100.0)
-        
+        else:
+            severity = DISEASE_INFO.get(pred_class, {}).get("severity", "medium")
+            sev_color = SEVERITY_COLORS.get(severity, "#f59e0b")
+            st.header(f"🔬 {disease_label}")
+            st.markdown(
+                f"**{get_text('severity_label', lang)}:** "
+                f"<span style='color:{sev_color}; font-weight:bold'>{severity.upper()}</span>",
+                unsafe_allow_html=True,
+            )
+    with res_col2:
+        st.metric(get_text("confidence", lang), f"{confidence:.1f}%")
         if confidence >= 80:
             st.success(get_text("high_confidence", lang))
         elif confidence >= 60:
             st.info(get_text("medium_confidence", lang))
         else:
             st.warning(get_text("low_confidence", lang))
-        
-        st.markdown("---")
-        
-        if pred_class in DISEASE_INFO:
-            info = DISEASE_INFO[pred_class]
-            severity = info.get("severity", "medium")
-            
-            st.markdown(f"### {get_text('severity_label', lang)}: {severity.upper()}")
-            
-            with st.expander(get_text("what_is_this", lang), expanded=True):
-                st.write(info["what_is"].get(lang, info["what_is"]["en"]))
-            
-            with st.expander(get_text("how_spreads", lang)):
-                st.write(info["spread"].get(lang, info["spread"]["en"]))
-            
-            with st.expander(get_text("causes_label", lang)):
-                st.markdown(info["causes"].get(lang, info["causes"]["en"]))
+        if use_ref:
+            st.caption(f"🔬 {get_text('refined_prediction', lang)}")
 
-            with st.expander(get_text("treatment_label", lang)):
-                st.markdown(info["cure"].get(lang, info["cure"]["en"]))
+    st.progress(confidence / 100.0)
 
-            with st.expander(get_text("prevention_label", lang)):
-                st.markdown(info["prevention"].get(lang, info["prevention"]["en"]))
-        
-        st.markdown("---")
-        
-        if st.checkbox(get_text("show_heatmap", lang)):
-            with st.spinner("Generating attention map..."):
-                heatmap = generate_heatmap(preprocessed, model, pred_class)
-                overlayed = overlay_heatmap(preprocessed, heatmap)
+    # -- Disease info tabs --
+    if pred_class in DISEASE_INFO:
+        info = DISEASE_INFO[pred_class]
+        st.divider()
 
-            st.subheader(get_text("attention_map", lang))
-            st.image(overlayed, use_container_width=True)
-            st.caption("Red/Yellow = model focus | Blue = less attention")
-        
-        with st.expander(get_text("all_probabilities", lang)):
-            CLASS_NAMES = ['Brown_Blight', 'Gray_Blight', 'Healthy_leaf', 'Helopeltis', 'Red_Rust', 'Red_spider', 'Sunlight_Scorching']
-            
-            # Ensure all_probs matches CLASS_NAMES length
-            display_probs = all_probs[:len(CLASS_NAMES)] if len(all_probs) >= len(CLASS_NAMES) else all_probs + [0] * (len(CLASS_NAMES) - len(all_probs))
-            
-            try:
-                # Strategy 1: Use English labels for matplotlib (more reliable)
-                # Keep disease names in English for plot, translate separately
-                
-                fig, ax = plt.subplots(figsize=(11, 6))
-                
-                # Use matplotlib's unicode-safe properties
-                plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'SimHei']
-                
-                colors = ['green' if c == pred_class else 'gray' for c in CLASS_NAMES]
-                y_pos = np.arange(len(CLASS_NAMES))
-                
-                # Strategy 2: Use English disease names for Y-axis (always reliable)
-                # Format: "English (Local)" to show translation
-                disease_labels = [get_disease_name(c, lang) for c in CLASS_NAMES]
-                
-                # For non-English languages, create hybrid labels
-                if lang != 'en':
-                    # Use numbered labels (safe) with translated names below
-                    y_labels = [f"{i+1}. {name}" for i, name in enumerate(disease_labels)]
-                else:
-                    y_labels = disease_labels
-                
-                # Create bar chart
-                ax.barh(y_pos, display_probs, color=colors, height=0.6)
-                ax.set_yticks(y_pos)
-                
-                # Strategy 3: Use Unicode-safe labels
-                ax.set_yticklabels(y_labels, fontsize=9)
-                
-                ax.set_xlabel(get_text("confidence", lang), fontsize=10)
-                ax.set_title(get_text("all_probabilities", lang), fontsize=11, pad=10)
-                
-                # Add value labels on bars
-                for i, v in enumerate(display_probs):
-                    ax.text(v + 1, i, f'{v:.1f}%', va='center', fontsize=8)
-                
-                ax.set_xlim(0, max(display_probs) + 15)
-                
-                # Adjust layout to prevent label cutoff
-                plt.tight_layout()
-                
-                st.pyplot(fig, use_container_width=True)
-                
-                # Strategy 4: Show translation legend below graph for non-English
-                if lang != 'en':
-                    st.markdown("**🔤 Disease Names:**")
-                    for i, (eng_name, trans_name) in enumerate(zip(CLASS_NAMES, disease_labels), 1):
-                        st.caption(f"{i}. {trans_name} ({eng_name})")
-                        
-            except Exception as e:
-                st.warning(f"⚠️ Graph rendering issue: {str(e)}")
-                # Fallback: show as interactive table
-                df_data = {
-                    get_text("disease", lang) or "Disease": disease_labels,
-                    get_text("confidence", lang) or "Confidence (%)": [f"{p:.1f}%" for p in display_probs],
-                }
-                for i, c in enumerate(CLASS_NAMES):
-                    df_data[get_disease_name(c, lang)] = [display_probs[i]]
-                st.dataframe(df_data)
+        tab_what, tab_spread, tab_cause, tab_cure, tab_prev = st.tabs([
+            f"❓ {get_text('what_is_this', lang)}",
+            f"🌀 {get_text('how_spreads', lang)}",
+            f"🔎 {get_text('causes_label', lang)}",
+            f"💊 {get_text('treatment_label', lang)}",
+            f"🛡️ {get_text('prevention_label', lang)}",
+        ])
+        with tab_what:
+            st.write(info["what_is"].get(lang, info["what_is"]["en"]))
+        with tab_spread:
+            st.write(info["spread"].get(lang, info["spread"]["en"]))
+        with tab_cause:
+            st.write(info["causes"].get(lang, info["causes"]["en"]))
+        with tab_cure:
+            st.write(info["cure"].get(lang, info["cure"]["en"]))
+        with tab_prev:
+            st.write(info["prevention"].get(lang, info["prevention"]["en"]))
 
-def show_about_page():
-    lang = st.session_state.get('lang', 'en')
-    
+    # -- Attention heatmap --
+    st.divider()
+    if st.checkbox(get_text("show_heatmap", lang)):
+        with st.spinner("Generating attention map..."):
+            hm = generate_heatmap(preprocessed)
+            overlay = overlay_heatmap(preprocessed, hm)
+        st.subheader(get_text("attention_map", lang))
+        st.image(overlay, use_container_width=True)
+        st.caption("Red/Yellow = high attention  |  Blue = low attention")
+
+    # -- All-class probability chart --
+    with st.expander(get_text("all_probabilities", lang)):
+        fig, ax = plt.subplots(figsize=(10, 5))
+        labels = [get_disease_name(c, "en") for c in CLASS_NAMES]
+        colours = ["#22c55e" if c == pred_class else "#94a3b8" for c in CLASS_NAMES]
+        y = np.arange(len(CLASS_NAMES))
+        ax.barh(y, display_probs, color=colours, height=0.55)
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels, fontsize=9)
+        ax.set_xlabel("Confidence (%)")
+        ax.set_xlim(0, max(float(display_probs.max()) + 15, 100))
+        for i, v in enumerate(display_probs):
+            ax.text(float(v) + 1, i, f"{v:.1f}%", va="center", fontsize=8)
+        plt.tight_layout()
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
+
+        # Translated legend for non-English
+        if lang != "en":
+            st.markdown("**🔤 Disease Names:**")
+            for c in CLASS_NAMES:
+                st.caption(f"• {get_disease_name(c, lang)}  ({get_disease_name(c, 'en')})")
+
+
+# -----------------------------------------------------------------------
+# ABOUT PAGE
+# -----------------------------------------------------------------------
+def show_about():
+    lang = st.session_state.get("lang", "en")
+
     st.title(get_text("about_title", lang))
 
+    # -- Model metrics --
     st.header(get_text("ai_performance", lang))
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Accuracy", "91.2%")
-    with col2:
-        st.metric("Model Size", "12 MB")
-    with col3:
-        st.metric("Tested Images", "1,599")
-    
-    st.info("**Model:** EfficientNetV2-B0 Fusion  \n**Classes:** 6 diseases + 1 healthy leaf  \n**Offline:** Works without internet")
-    
-    st.markdown("---")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Test Accuracy", "93.7%", help="With TTA (5 crops x 2 flips)")
+    m2.metric("Refined Accuracy", "94.2%", help="Post-hoc: T-scaling + thresholds + TTA")
+    m3.metric("Model Size (TFLite)", "9.05 MB")
+    m4.metric("Latency", "27 ms", help="Single image, Tesla T4 GPU")
+
+    m5, m6, m7, m8 = st.columns(4)
+    m5.metric("Macro F1", "93.4%")
+    m6.metric("FPS", "37.6")
+    m7.metric("Parameters", "8.1M", help="3.3M trainable")
+    m8.metric("Test Images", "1,599")
+
+    st.divider()
+
+    st.subheader("Architecture")
+    st.markdown("""
+| Component | Detail |
+|---|---|
+| **Spatial backbone** | EfficientNetV2-B0 (5.9M params) |
+| **Colour backbone** | MobileNetV2 alpha=0.35 (0.74M) - 8-ch input |
+| **Texture backbone** | MobileNetV2 alpha=0.35 (0.74M) - 11-ch input |
+| **Attention** | ECA (k=5) on each branch after GAP |
+| **Fusion** | Concat (128x3=384-d) - BN - Dense(256) - Dropout - Dense(7, softmax) |
+| **Training** | 2-phase: 25 frozen + 55 fine-tune, Focal Loss (gamma=2), AdamW, CosineAnnealing |
+| **Augmentation** | MixUp (alpha=0.3) + CutMix (alpha=1.0), triplet-safe |
+| **Colour features** | H, S, CLAHE-L*, a*, b*, ExG, a*/b*, R/G |
+| **Texture features** | Gray, Canny, Gabor x2, LocalStd, MorphGrad, CLAHEgray, LesionDensity, LBP x2, HueEdge |
+    """)
+
+    # -- Confusion matrix --
+    cm_path = MODEL_DIR / "confusion_matrix.png"
+    if cm_path.exists():
+        st.divider()
+        st.subheader("Confusion Matrix")
+        st.image(str(cm_path), use_container_width=True)
+
+    # -- Emergency helplines --
+    st.divider()
     st.header(get_text("emergency_helplines", lang))
-    
+
     helplines = [
         ("Tea Board of India", "1800-345-3644", "subsidies_smartcards"),
         ("Kisan Call Center", "1551", "agri_advice"),
         ("Tocklai Tea Research", "0376-2360974", "disease_emergency"),
         ("Assam Agri University", "0376-2340001", "plant_protection"),
-        ("Small Tea Growers", "+91-94350-32115", "local_support")
+        ("Small Tea Growers", "+91-94350-32115", "local_support"),
     ]
-    
-    for name, number, service_key in helplines:
-        st.subheader(name)
-        st.write(f"**{get_text('service_label', lang)}** {get_text(service_key, lang)}")
-        st.markdown(f"### {number}")
-        st.markdown("---")
-    
+    cols = st.columns(len(helplines))
+    for col, (name, number, svc) in zip(cols, helplines):
+        with col:
+            st.markdown(f"**{name}**")
+            st.caption(get_text(svc, lang))
+            st.code(number, language=None)
+
+    # -- Banking --
+    st.divider()
     st.header(get_text("banking_support", lang))
     st.markdown("""
-    **NABARD** - Agricultural Loans  
-    **SBI** - Kisan Credit Card  
-    **ACARDB** - Small Farmer Focus  
+| Organisation | Focus |
+|---|---|
+| **NABARD** | Agricultural Loans |
+| **SBI** | Kisan Credit Card |
+| **ACARDB** | Small Farmer Focus |
     """)
 
-    st.markdown("---")
+    # -- Model tensor info --
+    st.divider()
     st.header(get_text("model_information", lang))
     try:
-        interpreter, model_type = load_tflite_model()
-        if interpreter is None:
-            st.warning("No valid TFLite interpreter available.")
+        interp, mtype = load_tflite_model()
+        if interp:
+            with st.expander(get_text("input_tensors", lang)):
+                for d in interp.get_input_details():
+                    st.code(f"{d['name']}  shape={d['shape']}  dtype={d['dtype']}", language=None)
+            with st.expander(get_text("output_tensors", lang)):
+                for d in interp.get_output_details():
+                    st.code(f"{d['name']}  shape={d['shape']}  dtype={d['dtype']}", language=None)
         else:
-            with st.expander(get_text("input_tensors", lang), expanded=False):
-                input_details = interpreter.get_input_details()
-                for d in input_details:
-                    st.write(f"name: {d.get('name')} | shape: {d.get('shape')} | dtype: {d.get('dtype')}")
-
-            with st.expander(get_text("output_tensors", lang), expanded=False):
-                output_details = interpreter.get_output_details()
-                for d in output_details:
-                    st.write(f"name: {d.get('name')} | shape: {d.get('shape')} | dtype: {d.get('dtype')}")
+            st.warning("Model not loaded - tensor info unavailable.")
     except Exception as e:
         st.error(f"Model inspection failed: {e}")
 
+
+# -----------------------------------------------------------------------
 if __name__ == "__main__":
     main()
