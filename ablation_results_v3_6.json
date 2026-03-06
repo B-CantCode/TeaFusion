@@ -1,0 +1,111 @@
+{
+  "metadata": {
+    "description": "Ablation study for Tri-Branch Fusion v3.6 (ECA, LBP, 11-ch texture)",
+    "date": "2026-03-04T21:00:41.888759",
+    "phase1_epochs": 15,
+    "phase2_epochs": 15,
+    "image_size": 224,
+    "batch_size": 32,
+    "color_channels": 8,
+    "texture_channels": 11,
+    "eca_kernel_size": 5,
+    "confused_triplet": [
+      0,
+      1,
+      4
+    ],
+    "focal_alpha_boost": 2.0
+  },
+  "variants": {
+    "Spatial Only": {
+      "accuracy": 0.90744,
+      "macro_f1": 0.89904,
+      "params": 6249047,
+      "time_min": 43.6,
+      "per_class_f1": {
+        "Brown_Blight": 0.8483,
+        "Gray_Blight": 0.8418,
+        "Healthy_leaf": 0.9129,
+        "Helopeltis": 0.9385,
+        "Red_Rust": 0.8632,
+        "Red_spider": 0.9249,
+        "Sunlight_Scorching": 0.9637
+      }
+    },
+    "Color Only": {
+      "accuracy": 0.89118,
+      "macro_f1": 0.88971,
+      "params": 740200,
+      "time_min": 51.8,
+      "per_class_f1": {
+        "Brown_Blight": 0.85,
+        "Gray_Blight": 0.8481,
+        "Healthy_leaf": 0.9429,
+        "Helopeltis": 0.8973,
+        "Red_Rust": 0.8306,
+        "Red_spider": 0.9118,
+        "Sunlight_Scorching": 0.9474
+      }
+    },
+    "Texture Only": {
+      "accuracy": 0.84178,
+      "macro_f1": 0.8277,
+      "params": 740248,
+      "time_min": 169.7,
+      "per_class_f1": {
+        "Brown_Blight": 0.7964,
+        "Gray_Blight": 0.7129,
+        "Healthy_leaf": 0.7988,
+        "Helopeltis": 0.873,
+        "Red_Rust": 0.7976,
+        "Red_spider": 0.8682,
+        "Sunlight_Scorching": 0.9472
+      }
+    },
+    "Spatial + Color": {
+      "accuracy": 0.92996,
+      "macro_f1": 0.92383,
+      "params": 7118776,
+      "time_min": 69.8,
+      "per_class_f1": {
+        "Brown_Blight": 0.8771,
+        "Gray_Blight": 0.8779,
+        "Healthy_leaf": 0.9614,
+        "Helopeltis": 0.9646,
+        "Red_Rust": 0.8833,
+        "Red_spider": 0.9431,
+        "Sunlight_Scorching": 0.9594
+      }
+    },
+    "Spatial + Texture": {
+      "accuracy": 0.87617,
+      "macro_f1": 0.86272,
+      "params": 7118824,
+      "time_min": 176.4,
+      "per_class_f1": {
+        "Brown_Blight": 0.7829,
+        "Gray_Blight": 0.7733,
+        "Healthy_leaf": 0.8874,
+        "Helopeltis": 0.9268,
+        "Red_Rust": 0.8148,
+        "Red_spider": 0.9002,
+        "Sunlight_Scorching": 0.9537
+      }
+    },
+    "All 3 Branches (no CBAM)": {
+      "accuracy": 0.9237,
+      "macro_f1": 0.91671,
+      "params": 8097737,
+      "time_min": 187.5,
+      "per_class_f1": {
+        "Brown_Blight": 0.858,
+        "Gray_Blight": 0.8738,
+        "Healthy_leaf": 0.9553,
+        "Helopeltis": 0.9636,
+        "Red_Rust": 0.8735,
+        "Red_spider": 0.9395,
+        "Sunlight_Scorching": 0.9533
+      }
+    }
+  }
+}

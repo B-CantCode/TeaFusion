@@ -1,0 +1,252 @@
+{
+  "metadata": {
+    "model": "EfficientNetV2-B0 + MobileNetV2 ECA Tri-Branch Fusion v3.6",
+    "version": "3.6.0",
+    "date": "2026-03-03T22:48:46.536296",
+    "training_time_h": 8.537,
+    "total_params": 8103134,
+    "trainable_params": 3317922,
+    "epochs": 80,
+    "batch_size": 32,
+    "image_size": 224,
+    "loss": "PerClassFocal(g=2.0, alpha_boost=2.0)",
+    "optimizer": "AdamW(wd=0.0001)",
+    "aux_loss_weight": 0.3,
+    "label_smoothing": 0.1,
+    "problem_label_smoothing": 0.0,
+    "focal_alpha_boost_triplet": 2.0,
+    "confused_triplet": [
+      "Brown_Blight",
+      "Gray_Blight",
+      "Red_Rust"
+    ],
+    "mixup_alpha": 0.3,
+    "cutmix_alpha": 1.0,
+    "mixup_cutmix_target": "RGB_only",
+    "augmentation": "flip, rotate, brightness, contrast (no GridMask)",
+    "lr_schedule": "CosineAnnealingWarmUp (offset-corrected)",
+    "fusion_method": "Simple Concat + BN + Dense (no SE gate, no CBAM)",
+    "attention": "ECA(k=5) on aux branches",
+    "aux_backbone": "MobileNetV2 a=0.35",
+    "preprocessing": "EfficientNetV2 preprocess + tanh-bounded projection",
+    "color_features": "8-ch (H,S,CLAHE-L*,a*,b*,ExG,a*/b*,R/G)",
+    "texture_features": "11-ch (Gray,Canny,Gabor0,Gabor45,LocalStd,MorphGrad,CLAHEgray,LesionDensity,LBP_gray,LBP_a*,HueWeightedEdge)",
+    "dropout": "head=0.25/0.15, branch=0.2",
+    "tta": "crops=5, flips=True, temperature=1.5",
+    "mixup_cutmix_note": "triplet-safe (skips within-triplet cross-class mixing)",
+    "v36_changes": [
+      "Removed CBAM (ablation: +2.06% without)",
+      "Removed SupCon loss",
+      "Removed SWA",
+      "Simple concat fusion (no SE gate)",
+      "ECA attention on MobileNetV2 branches",
+      "LBP texture channels (gray + a*)",
+      "Hue-weighted edge channel",
+      "Dropout reduced 0.4/0.3 -> 0.25/0.15",
+      "Label smoothing removed for triplet",
+      "L2 kernel regularizer removed",
+      "GridMask removed"
+    ],
+    "seed": 42
+  },
+  "performance": {
+    "test_accuracy": 0.93684,
+    "macro_f1": 0.93351,
+    "weighted_f1": 0.93738,
+    "test_samples": 1599,
+    "classes": [
+      "Brown_Blight",
+      "Gray_Blight",
+      "Healthy_leaf",
+      "Helopeltis",
+      "Red_Rust",
+      "Red_spider",
+      "Sunlight_Scorching"
+    ],
+    "aux_spatial_accuracy": 0.87179,
+    "aux_color_accuracy": 0.90119,
+    "aux_texture_accuracy": 0.83365,
+    "fusion_gain_over_best_branch": 0.03565,
+    "tta_enabled": true
+  },
+  "per_class_metrics": {
+    "Brown_Blight": {
+      "precision": 0.8541666666666666,
+      "recall": 0.9318181818181818,
+      "f1": 0.8913043478260869,
+      "support": 176
+    },
+    "Gray_Blight": {
+      "precision": 0.8588235294117647,
+      "recall": 0.954248366013072,
+      "f1": 0.9040247678018576,
+      "support": 153
+    },
+    "Healthy_leaf": {
+      "precision": 0.9787234042553191,
+      "recall": 0.9787234042553191,
+      "f1": 0.9787234042553191,
+      "support": 141
+    },
+    "Helopeltis": {
+      "precision": 0.9972677595628415,
+      "recall": 0.9358974358974359,
+      "f1": 0.9656084656084656,
+      "support": 390
+    },
+    "Red_Rust": {
+      "precision": 0.8884120171673819,
+      "recall": 0.8697478991596639,
+      "f1": 0.8789808917197452,
+      "support": 238
+    },
+    "Red_spider": {
+      "precision": 0.9552845528455285,
+      "recall": 0.9670781893004116,
+      "f1": 0.9611451942740287,
+      "support": 243
+    },
+    "Sunlight_Scorching": {
+      "precision": 0.9681274900398407,
+      "recall": 0.9418604651162791,
+      "f1": 0.9548133595284872,
+      "support": 258
+    }
+  },
+  "confusion_matrix": [
+    [
+      164,
+      4,
+      0,
+      0,
+      8,
+      0,
+      0
+    ],
+    [
+      4,
+      146,
+      0,
+      0,
+      0,
+      3,
+      0
+    ],
+    [
+      0,
+      1,
+      138,
+      0,
+      0,
+      2,
+      0
+    ],
+    [
+      8,
+      9,
+      2,
+      365,
+      2,
+      4,
+      0
+    ],
+    [
+      14,
+      6,
+      0,
+      1,
+      207,
+      2,
+      8
+    ],
+    [
+      2,
+      4,
+      1,
+      0,
+      1,
+      235,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      15,
+      0,
+      243
+    ]
+  ],
+  "confusion_matrix_pct": [
+    [
+      93.18,
+      2.27,
+      0.0,
+      0.0,
+      4.55,
+      0.0,
+      0.0
+    ],
+    [
+      2.61,
+      95.42,
+      0.0,
+      0.0,
+      0.0,
+      1.96,
+      0.0
+    ],
+    [
+      0.0,
+      0.71,
+      97.87,
+      0.0,
+      0.0,
+      1.42,
+      0.0
+    ],
+    [
+      2.05,
+      2.31,
+      0.51,
+      93.59,
+      0.51,
+      1.03,
+      0.0
+    ],
+    [
+      5.88,
+      2.52,
+      0.0,
+      0.42,
+      86.97,
+      0.84,
+      3.36
+    ],
+    [
+      0.82,
+      1.65,
+      0.41,
+      0.0,
+      0.41,
+      96.71,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      5.81,
+      0.0,
+      94.19
+    ]
+  ],
+  "edge_deployment": {
+    "tflite_size_mb": 9.05,
+    "mean_latency_ms": 26.59,
+    "std_latency_ms": 2.47,
+    "fps": 37.6
+  }
+}
